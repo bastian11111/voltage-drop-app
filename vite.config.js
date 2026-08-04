@@ -5,7 +5,7 @@ import react from "@vitejs/plugin-react";
 // La landing page se sirve desde public/
 export default defineConfig({
   plugins: [react()],
-  base: "/app/",
+  base: "/voltage-drop-app/app/",
   build: {
     chunkSizeWarningLimit: 1000,
     rollupOptions: {

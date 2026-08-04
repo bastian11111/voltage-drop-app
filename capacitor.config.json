@@ -1,0 +1,10 @@
+{
+  "appId": "cl.tuempresa.caidatension",
+  "appName": "Caída de Tensión RIC4",
+  "webDir": "dist",
+  "bundledWebRuntime": false,
+  "backgroundColor": "#101619",
+  "android": {
+    "backgroundColor": "#101619"
+  }
+}

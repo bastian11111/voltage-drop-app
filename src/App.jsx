@@ -1,10 +1,10 @@
 import React, { useState, useMemo, useEffect, useRef } from "react";
 import { Cable, Gauge, Settings2, AlertTriangle, CheckCircle2, ChevronDown, Layers, ShieldCheck, Download } from "lucide-react";
 import jsPDF from "jspdf";
-import html2canvas from "html2canvas";
+import autoTable from "jspdf-autotable";
 
 // ---------- Datos técnicos base (referencia práctica RIC N°4 / uso habitual en Chile) ----------
-const SECCIONES_MM2 = [1.5, 2.5, 4, 6, 10, 16, 25, 35, 50, 70, 95, 120, 150, 185, 240, 300];
+const SECCIONES_MM2 = [1, 1.5, 2.5, 4, 6, 10, 16, 25, 35, 50, 70, 95, 120, 150, 185, 240, 300, 400];
 
 // Equivalencia AWG/kcmil -> mm² (área real de cobre)
 const AWG_TABLE = [
@@ -52,6 +52,7 @@ const CANALIZACIONES = [
 ];
 
 const AMPACIDAD_CU = {
+  1: [11, 13, 15],
   1.5: [15, 15.5, 19],
   2.5: [20, 21, 26],
   4: [25, 28, 35],
@@ -68,6 +69,7 @@ const AMPACIDAD_CU = {
   185: [211, 262, 362],
   240: [240, 300, 424],
   300: [265, 340, 486],
+  400: [305, 390, 560],
 };
 
 // Termomagnético — series estándar de corriente nominal (A)
@@ -252,31 +254,158 @@ export default function VoltageDropApp() {
   const proteccionOk = iz ? inRecomendado <= iz : true;
   const margenIn = (inRecomendado / I).toFixed(2);
 
-  // ---- Generación de PDF ----
+  // ---- Generación de PDF (texto real, no imagen) ----
   const generarPDF = async () => {
-    if (!reportRef.current) return;
     setGenerandoPDF(true);
     try {
-      const canvas = await html2canvas(reportRef.current, {
-        scale: 2,
-        backgroundColor: "#101619",
-        useCORS: true,
-      });
-      const imgData = canvas.toDataURL("image/png");
-      const pdf = new jsPDF({
-        orientation: canvas.width > canvas.height ? "landscape" : "portrait",
-        unit: "mm",
-        format: "a4",
-      });
-      const pdfWidth = pdf.internal.pageSize.getWidth();
-      const pdfHeight = pdf.internal.pageSize.getHeight();
-      const ratio = Math.min(pdfWidth / canvas.width, pdfHeight / canvas.height) * 100;
-      pdf.addImage(imgData, "PNG", 0, 0, pdfWidth, pdfHeight);
-      
+      const pdf = new jsPDF({ orientation: "portrait", unit: "mm", format: "a4" });
+      const pageWidth = pdf.internal.pageSize.getWidth();
+      const marginX = 14;
+      let y = 18;
+
+      // --- Encabezado ---
+      try {
+        pdf.addImage(LOGO_TAU, "PNG", marginX, y - 6, 14, 14);
+      } catch (e) {
+        // si el logo falla, se omite sin bloquear el PDF
+      }
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(14);
+      pdf.text("TAU Soluciones Eléctricas", marginX + 18, y);
+      pdf.setFont("helvetica", "normal");
+      pdf.setFontSize(10);
+      pdf.text("Reporte de Caída de Tensión · Norma RIC N°4", marginX + 18, y + 6);
+
       const fecha = new Date().toLocaleString("es-CL");
+      pdf.setFontSize(9);
+      pdf.text(`Generado: ${fecha}`, pageWidth - marginX, y, { align: "right" });
+
+      y += 16;
+      pdf.setDrawColor(200, 200, 200);
+      pdf.line(marginX, y, pageWidth - marginX, y);
+      y += 8;
+
+      // --- Tabla: Parámetros del circuito ---
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(11);
+      pdf.text("Parámetros del circuito", marginX, y);
+      y += 3;
+
+      const filasParametros = [
+        ["Tipo de sistema", esTrifasico ? "Trifásico · 380V" : "Monofásico · 220V"],
+        ["Material del conductor", MATERIALES[material].nombre],
+        [
+          "Dato de carga",
+          modoCarga === "corriente"
+            ? `Corriente: ${Number(corriente).toFixed(2)} A`
+            : `Potencia: ${Number(potencia).toFixed(0)} W`,
+        ],
+        ["Corriente de diseño (Ib)", `${I.toFixed(2)} A`],
+        ["Tensión nominal", `${voltaje} V`],
+        ["Factor de potencia (cos φ)", `${cosphi}`],
+        ["Longitud del circuito", `${longitud} m`],
+        ["Tipo de canalización", CANALIZACIONES.find((c) => c.id === canalizacion).nombre],
+        ["Reactancia inductiva incluida", incluirReactancia ? "Sí" : "No"],
+        [
+          "Sección del conductor",
+          `${seccionEfectiva} mm² (${mm2ToAwg(seccionEfectiva)} AWG aprox.) · ${
+            modoSeccion === "sugerir" ? "sugerida automáticamente" : "ingresada manualmente"
+          }`,
+        ],
+        ["Límite normativo de referencia", `${limiteSeleccionado}%`],
+      ];
+
+      autoTable(pdf, {
+        startY: y,
+        margin: { left: marginX, right: marginX },
+        head: [["Parámetro", "Valor"]],
+        body: filasParametros,
+        theme: "grid",
+        styles: { fontSize: 9, cellPadding: 2.2 },
+        headStyles: { fillColor: [40, 50, 56], textColor: 255 },
+        columnStyles: { 0: { cellWidth: 70 } },
+      });
+
+      y = pdf.lastAutoTable.finalY + 10;
+
+      // --- Tabla: Resultado ---
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(11);
+      pdf.text("Resultado", marginX, y);
+      y += 3;
+
+      const filasResultado = [
+        ["Caída de tensión (ΔV)", `${deltaVFinal.toFixed(2)} V`],
+        ["Caída de tensión (%)", `${pctFinal.toFixed(2)} %`],
+        ["Tensión en carga", `${(voltaje - deltaVFinal).toFixed(1)} V`],
+        ["¿Cumple límite de caída de tensión?", cumple ? "Sí" : "No"],
+        [
+          "Ampacidad admisible del conductor",
+          capacidadSeccionEfectiva !== null ? `${capacidadSeccionEfectiva.toFixed(1)} A` : "N/D",
+        ],
+        ["¿Cumple ampacidad admisible?", ampacidadOk ? "Sí" : "No"],
+      ];
+
+      autoTable(pdf, {
+        startY: y,
+        margin: { left: marginX, right: marginX },
+        head: [["Ítem", "Valor"]],
+        body: filasResultado,
+        theme: "grid",
+        styles: { fontSize: 9, cellPadding: 2.2 },
+        headStyles: { fillColor: [40, 50, 56], textColor: 255 },
+        columnStyles: { 0: { cellWidth: 70 } },
+      });
+
+      y = pdf.lastAutoTable.finalY + 10;
+
+      // --- Tabla: Termomagnético recomendado ---
+      pdf.setFont("helvetica", "bold");
+      pdf.setFontSize(11);
+      pdf.text("Termomagnético recomendado", marginX, y);
+      y += 3;
+
+      const filasProteccion = [
+        ["Tipo de carga", cargaSeleccionada.nombre],
+        ["Corriente nominal (In)", `${inRecomendado} A`],
+        ["Curva de disparo", `Curva ${cargaSeleccionada.curva} (${cargaSeleccionada.rango})`],
+        ["Verificación de coordinación", `Ib ${I.toFixed(1)} A ≤ In ${inRecomendado} A ≤ Iz ${capacidadSeccionEfectiva ? capacidadSeccionEfectiva.toFixed(1) : "N/D"} A`],
+        ["¿Coordinación correcta?", proteccionOk ? "Sí" : "No"],
+        ["Margen sobre corriente de diseño", `×${margenIn}`],
+      ];
+
+      autoTable(pdf, {
+        startY: y,
+        margin: { left: marginX, right: marginX },
+        head: [["Ítem", "Valor"]],
+        body: filasProteccion,
+        theme: "grid",
+        styles: { fontSize: 9, cellPadding: 2.2 },
+        headStyles: { fillColor: [40, 50, 56], textColor: 255 },
+        columnStyles: { 0: { cellWidth: 70 } },
+      });
+
+      y = pdf.lastAutoTable.finalY + 10;
+
+      // --- Nota descriptiva de la curva ---
+      pdf.setFont("helvetica", "italic");
+      pdf.setFontSize(8.5);
+      const notaLines = pdf.splitTextToSize(cargaSeleccionada.desc, pageWidth - marginX * 2);
+      pdf.text(notaLines, marginX, y);
+      y += notaLines.length * 4 + 8;
+
+      // --- Pie de página / disclaimer ---
+      const pageHeight = pdf.internal.pageSize.getHeight();
+      pdf.setFont("helvetica", "normal");
       pdf.setFontSize(8);
-      pdf.text(`Generado: ${fecha}`, 10, pdfHeight - 5);
-      
+      pdf.setTextColor(120, 120, 120);
+      const disclaimer =
+        "Los cálculos son referencias orientativas obtenidas con la calculadora TAU Soluciones Eléctricas. " +
+        "Verifica contra la norma RIC N°4 vigente y las tablas oficiales antes de usar en proyectos reales.";
+      const disclaimerLines = pdf.splitTextToSize(disclaimer, pageWidth - marginX * 2);
+      pdf.text(disclaimerLines, marginX, pageHeight - 14);
+      pdf.text("TAU Soluciones Eléctricas · Santiago, Chile", marginX, pageHeight - 6);
+
       pdf.save(`caida-tension-RIC4_${new Date().getTime()}.pdf`);
     } catch (err) {
       console.error("Error generando PDF:", err);

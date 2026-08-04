@@ -29,13 +29,16 @@ jobs:
     - name: Build
       run: npm run build
 
-    - name: Copy public files to dist
-      run: cp -r public/* dist/ 2>/dev/null || true
+    - name: Arrange site structure
+      run: |
+        mkdir -p site/app
+        cp -r dist/* site/app/
+        cp -r public/* site/
 
     - name: Upload artifact
       uses: actions/upload-pages-artifact@v3
       with:
-        path: './dist'
+        path: './site'
 
   deploy:
     needs: build
